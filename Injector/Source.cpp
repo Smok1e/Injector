@@ -1,6 +1,9 @@
 #include <Windows.h>
 #include <Psapi.h>
+#include <Shlwapi.h>
+
 #include <cstdio>
+#include <cstdarg>
 #include <filesystem>
 
 #pragma warning(disable: 6387)
@@ -9,111 +12,251 @@
 
 constexpr size_t BUFFSIZE = 1024;
 
+bool   Quiet               = false;
+bool   DebugOutput         = false;
+HANDLE RemoteProcessHandle = nullptr;
+void*  RemoteDllPath       = nullptr;
+
 //----------------------------------------------
 
+bool        IsOption           (const char* arg);
+bool        IsValidUnsigned    (const char* str);
+char*       GetArgument        (int argc, char* argv[], size_t index);
+unsigned    GetArgumentUnsigned(int argc, char* argv[], size_t index);
+bool        IsOptionPresent    (int argc, char* argv[], char option);
+		    
+void        PrintUsage         ();
+void        InjectDLL          (HANDLE process, const std::filesystem::path& dll_path);
+void        Cleanup            ();
+
+void        DebugPrintf        (const char* format, ...);
+void        ExitWithError      (const char* format, ...);
+
+HANDLE      FindProcess        (const char* substring);
 const char* GetLastErrorMessage();
 
 //----------------------------------------------
 
 int main(int argc, char* argv[])
 {
-	if (argc < 3)
+	atexit(Cleanup);
+
+	if (IsOptionPresent(argc, argv, 'h'))
 	{
-		printf("Usage: inject.exe <target process id> <injected dll path>");
+		PrintUsage();
 		return 0;
 	}
 
-	for (const char* ch = argv[1]; *ch; ch++)
+	Quiet       = IsOptionPresent(argc, argv, 'q');
+	DebugOutput = IsOptionPresent(argc, argv, 'v');
+
+	RemoteProcessHandle = IsOptionPresent(argc, argv, 'n')
+		? FindProcess(GetArgument(argc, argv, 0))
+		: reinterpret_cast<HANDLE>(GetArgumentUnsigned(argc, argv, 0));
+
+	if (!RemoteProcessHandle)
+		ExitWithError("Process not found\n");
+
+	std::filesystem::path dll_path = std::filesystem::absolute(GetArgument(argc, argv, 1));
+	InjectDLL(RemoteProcessHandle, dll_path.string());
+	
+	return 0;
+}
+
+//----------------------------------------------
+
+bool IsOption(const char* arg)
+{
+	return *arg == '-';
+}
+
+bool IsValidUnsigned(const char* str)
+{
+	for (const char* ch = str; *ch; ch++)
+		if (!isdigit(*ch)) return false;
+
+	return true;
+}
+
+char* GetArgument(int argc, char* argv[], size_t index)
+{
+	for (size_t i = 1, arg = 0; i < argc; i++, arg += !IsOption(argv[i]))
+		if (arg == index+1) return argv[i];
+
+	ExitWithError("Expected at least %zu arguments\n", index+1);
+	return nullptr;
+}
+
+unsigned GetArgumentUnsigned(int argc, char* argv[], size_t index)
+{
+	char* arg = GetArgument(argc, argv, index);
+	if (!IsValidUnsigned(arg))
 	{
-		if (!isdigit(*ch))
-		{
-			fprintf(stderr, "invalid process id\n");
-			return 1;
-		}
+		ExitWithError("Argument #%zu is not a valid unsigned number\n", index+1);
+		return 0;
 	}
 
-	int pid = strtoul(argv[1], nullptr, 10);
+	return strtoul(arg, nullptr, 10);
+}
 
-	std::filesystem::path dll_path = std::filesystem::absolute(argv[2]);
+bool IsOptionPresent(int argc, char* argv[], char option)
+{
+	for (size_t i = 0; i < argc; i++)
+	{
+		if (!IsOption(argv[i]))
+			continue;
+
+		for (const char* ch = argv[i]+1; *ch; ch++)
+			if (*ch == option) return true;
+	}
+
+	return false;
+}
+
+//----------------------------------------------
+
+void PrintUsage()
+{
+	printf("Usage: inject.exe -[hnvq] <target process id> <injected dll path>\n");
+	printf("  -h: Print help\n");
+	printf("  -n: Target process is process name substring\n");
+	printf("  -v: Verbous mode\n");
+	printf("  -q: Quiet mode\n");
+}
+
+void InjectDLL(HANDLE process, const std::filesystem::path& dll_path)
+{
 	std::string dll_path_string = dll_path.string();
-
 	if (!std::filesystem::exists(dll_path))
-	{
-		fprintf(stderr, "File '%s' does not exist\n", dll_path_string.c_str());
-		return 1;
-	}
+		ExitWithError("File '%s' does not exist\n", dll_path_string.c_str());
 
-	HANDLE target_process_handle = OpenProcess(PROCESS_ALL_ACCESS, false, pid);
-	if (!target_process_handle)
-	{
-		fprintf(stderr, "Unable to open process with id %lu: %s\n", pid, GetLastErrorMessage());
-		return 1;
-	}
+	size_t remote_dll_path_size = dll_path_string.length()+1;
+	DebugPrintf("Allocating %zu bytes of memory in remote process to store dll path\n", remote_dll_path_size);
 
-	void* remote_module_path_addr = VirtualAllocEx(
-		target_process_handle, 
-		nullptr, 
-		dll_path_string.length()+1, 
-		MEM_COMMIT, 
+	if (!(RemoteDllPath = VirtualAllocEx(
+		process,
+		nullptr,
+		dll_path_string.length()+1,
+		MEM_COMMIT,
 		PAGE_READWRITE
-	);
+	))) ExitWithError("Unable to allocate memory for dll path buffer in target process: %s\n", GetLastErrorMessage());
 
-	if (!remote_module_path_addr)
-	{
-		CloseHandle(target_process_handle);
-		fprintf(stderr, "Unable to allocate memory for dll path buffer in target process: %s\n", GetLastErrorMessage());
-		return 1;
-	}
+	DebugPrintf("Writing memory...\n");
 
-	size_t bytes_written = 0;
+	size_t written_bytes = 0;
 	if (!WriteProcessMemory(
-		target_process_handle, 
-		remote_module_path_addr, 
-		dll_path_string.c_str(), 
-		dll_path_string.length()+1, 
-		&bytes_written
-	))
-	{
-		VirtualFreeEx(target_process_handle, remote_module_path_addr, 0, MEM_RELEASE);
-		CloseHandle(target_process_handle);
-		fprintf(stderr, "Unable to write dll path into target process memory space: %s\n", GetLastErrorMessage());
-		return 1;
-	}
+		process,
+		RemoteDllPath,
+		dll_path_string.c_str(),
+		dll_path_string.length()+1,
+		&written_bytes
+	)) ExitWithError("Unable to write dll path into target process memory space: %s\n", GetLastErrorMessage());
 
-	auto remote_thread_procedure = reinterpret_cast<LPTHREAD_START_ROUTINE>
-	(
-		GetProcAddress(GetModuleHandleA("Kernel32.dll"), "LoadLibraryA")
-	);
+	DebugPrintf("Written %zu bytes\n", written_bytes);
 
-	HANDLE remote_thread = CreateRemoteThread(
-		target_process_handle, 
+	auto thread_proc = GetProcAddress(GetModuleHandleA("Kernel32.dll"), "LoadLibraryA");
+
+	DebugPrintf("Starting remote thread\n");
+	HANDLE thread = CreateRemoteThread(
+		process, 
 		nullptr, 
 		0, 
-		remote_thread_procedure,
-		remote_module_path_addr,
+		reinterpret_cast<LPTHREAD_START_ROUTINE>(thread_proc),
+		RemoteDllPath,
 		0,
 		nullptr
 	);
 
-	if (!remote_thread)
+	if (!thread)
+		ExitWithError("Unable to start remote thread: %s\n", GetLastErrorMessage());
+
+	DebugPrintf("Waiting for remote thread to terminate...\n");
+	WaitForSingleObject(thread, INFINITE);
+	DebugPrintf("Done\n");
+
+	if (!Quiet)
 	{
-		VirtualFreeEx(target_process_handle, remote_module_path_addr, 0, MEM_RELEASE);
-		CloseHandle(target_process_handle);
-		fprintf(stderr, "Unable to start thread inside target process: %s\n", GetLastErrorMessage());
-		return 1;
+		char process_base_name[MAX_PATH] = "";
+		GetModuleBaseNameA(process, 0, process_base_name, MAX_PATH);
+		printf("%s was successfully injected into %s\n", dll_path.filename().string().c_str(), process_base_name);
+	}
+}
+
+void Cleanup()
+{
+	DebugPrintf("Cleaning up...\n");
+	if (RemoteProcessHandle) 
+	{
+		if (RemoteDllPath)
+		{
+			DebugPrintf("Releasing remote allocated memory...\n");
+			VirtualFreeEx(RemoteProcessHandle, RemoteDllPath, 0, MEM_RELEASE);
+		}
+
+		DebugPrintf("Closing process handle...\n");
+		CloseHandle(RemoteProcessHandle);
 	}
 
-	WaitForSingleObject(remote_thread, INFINITE);
-
-	char process_base_name[BUFFSIZE] = "";
-	GetModuleBaseNameA(target_process_handle, 0, process_base_name, BUFFSIZE);
-	printf("%s was successfully injected into %s.\n", dll_path.filename().string().c_str(), process_base_name);
-
-	VirtualFreeEx(target_process_handle, remote_module_path_addr, 0, MEM_RELEASE);
-	CloseHandle(target_process_handle);
+	DebugPrintf("Done\n");
 }
 
 //----------------------------------------------
+
+void DebugPrintf(const char* format, ...)
+{
+	if (DebugOutput)
+	{
+		printf("[DEBUG]: ");
+
+		std::va_list args = {};
+		va_start(args, format);
+		vprintf(format, args);
+		va_end(args);
+	}
+}
+
+void ExitWithError(const char* format, ...)
+{
+	if (!Quiet)
+	{
+		std::va_list args = {};
+		va_start(args, format);
+		vfprintf(stderr, format, args);
+		va_end(args);
+	}
+
+	exit(1);
+}
+
+//----------------------------------------------
+
+HANDLE FindProcess(const char* substring)
+{
+	DebugPrintf("Searching process by substring '%s'...\n", substring);
+
+	DWORD process_ids[BUFFSIZE] = {};
+	DWORD read_bytes = 0;
+	EnumProcesses(process_ids, sizeof(process_ids), &read_bytes);
+
+	size_t process_count = read_bytes/sizeof(DWORD);
+	for (size_t i = 0; i < process_count; i++)
+	{
+		HANDLE process = OpenProcess(PROCESS_ALL_ACCESS, false, process_ids[i]);
+
+		char process_base_name[BUFFSIZE] = "";
+		GetModuleBaseNameA(process, 0, process_base_name, BUFFSIZE);
+		if (StrStrIA(process_base_name, substring))
+		{
+			DebugPrintf("Found process '%s'\n", process_base_name);
+			return process;
+		}
+
+		CloseHandle(process);
+	}
+
+	DebugPrintf("Specified process not found\n");
+	return nullptr;
+}
 
 const char* GetLastErrorMessage()
 {
