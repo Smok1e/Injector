@@ -1,4 +1,4 @@
-#include <Windows.h>
+﻿#include <Windows.h>
 #include <Psapi.h>
 #include <Shlwapi.h>
 
@@ -120,7 +120,7 @@ void PrintUsage()
 	printf("Usage: inject.exe -[hnvq] <target process id> <injected dll path>\n");
 	printf("  -h: Print help\n");
 	printf("  -n: Target process is process name substring\n");
-	printf("  -v: Verbous mode\n");
+	printf("  -v: Verbose mode\n");
 	printf("  -q: Quiet mode\n");
 }
 
