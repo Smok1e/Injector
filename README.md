@@ -80,10 +80,10 @@ T SetProcAddress(const char* target_module_name, const char* target_prog_name, T
 	return nullptr;
 }
 
-// Here we'll store original CreateFileA imported from Kernel32.dll
+// Here we'll store original CreateFileW imported from Kernel32.dll
 HANDLE (*K32_CreateFileW)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE) = nullptr;
 
-// This function will replace CreateFileA import from Kernel32.dll
+// This function will replace CreateFileW import from Kernel32.dll
 HANDLE HOOK_CreateFileW(
 	LPCWSTR               lpFileName,
 	DWORD                 dwDesiredAccess,
