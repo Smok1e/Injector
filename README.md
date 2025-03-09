@@ -146,6 +146,7 @@ cmake --build . --config Release
 ```
 
 # Usage                                                    
+```
 inject.exe    [OPTIONS] <PID>  <DLL> - inject DLL into an existing process by PID
 inject.exe -n [OPTIONS] <NAME> <DLL> - inject DLL into an existing process by name
 inject.exe -c [OPTIONS] <EXE>  <DLL> - create process with DLL injected
@@ -155,3 +156,4 @@ Available options:
   -n, --name   - Identify process by name substring
   -c, --create - Create process injected
   -q, --quiet  - Suppress output
+```
