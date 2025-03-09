@@ -37,10 +37,10 @@ private:
 		{"quiet",  "Suppress output"                   }
 	};
 
-	bool        m_quiet          = false;
-	HANDLE      m_process_handle = nullptr;
-	HANDLE      m_thread_handle  = nullptr;
-	std::string m_dll_name       = "";
+	bool                  m_quiet          = false;
+	HANDLE                m_process_handle = nullptr;
+	HANDLE                m_thread_handle  = nullptr;
+	std::filesystem::path m_dll_name       = "";
 
 	void inject();
 
@@ -85,14 +85,12 @@ void Main::start(int argc, char* argv[])
 		}
 
 		m_quiet = m_args["quiet"];
-		m_dll_name = m_args[1].as<std::string_view>();
+		m_dll_name = std::filesystem::absolute(m_args[1]);
 
 		// Create child process
 		if (m_args["create"])
 		{
-			std::string exe_path = m_args[0];
-
-			std::string command_line = exe_path;
+			std::string command_line = m_args[0];
 			for (const auto& argument: m_args.getRemainingArguments())
 				(command_line += ' ') += argument;
 
@@ -101,7 +99,7 @@ void Main::start(int argc, char* argv[])
 
 			if (
 				!CreateProcessA(
-					exe_path.c_str(),
+					nullptr,
 					command_line.data(),
 					NULL,
 					NULL,
@@ -162,11 +160,13 @@ void Main::start(int argc, char* argv[])
 
 void Main::inject()
 {
+	auto dll_name_string = m_dll_name.string();
+
 	auto* remote_dll_path = reinterpret_cast<char*>(
 		VirtualAllocEx(
 			m_process_handle,
 			nullptr,
-			m_dll_name.length() + 1,
+			dll_name_string.length() + 1,
 			MEM_COMMIT,
 			PAGE_READWRITE
 		)
@@ -178,8 +178,8 @@ void Main::inject()
 	if (!WriteProcessMemory(
 		m_process_handle,
 		remote_dll_path,
-		m_dll_name.data(),
-		m_dll_name.length() + 1,
+		dll_name_string.data(),
+		dll_name_string.length() + 1,
 		nullptr
 	))
 		throw WinAPIError("Unable to write dll path into target process memory");
@@ -198,6 +198,7 @@ void Main::inject()
 		throw WinAPIError("Unable to start remote thread");
 
 	WaitForSingleObject(remote_thread, INFINITE);
+	CloseHandle(remote_thread);
 	VirtualFreeEx(m_process_handle, remote_dll_path, 0, MEM_RELEASE);
 
 	if (!m_quiet)
@@ -206,7 +207,7 @@ void Main::inject()
 		GetModuleBaseNameA(m_process_handle, 0, process_name, std::size(process_name));
 
 		std::cout 
-			<< m_dll_name 
+			<< m_dll_name.filename().string() 
 			<< " was successfully injected into " << process_name 
 			<< std::endl;
 	}
