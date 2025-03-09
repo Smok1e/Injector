@@ -11,9 +11,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED   True)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON  )
 
 add_executable(
-	injector
+	inject
 	src/Main.cpp
 )
 
 add_subdirectory(external/ArgParser)
-target_link_libraries(injector PRIVATE ArgParser)
+target_link_libraries(inject PRIVATE ArgParser)

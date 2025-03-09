@@ -1,0 +1,4 @@
+[submodule "external/ArgParser"]
+	path = external/ArgParser
+	url = https://github.com/Smok1e/ArgParser
+	branch = master
