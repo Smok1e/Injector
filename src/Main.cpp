@@ -72,11 +72,11 @@ void Main::start(int argc, char* argv[])
 		if (m_args["help"] || m_args.getArgumentCount() < 2)
 		{
 			std::cout << std::format(
-				"Usage: {0}    [OPTIONS] <PID>  <DLL> - inject DLL into an existing process by PID \n"
-				"       {0} -n [OPTIONS] <NAME> <DLL> - inject DLL into an existing process by name\n"
-				"       {0} -c [OPTIONS] <EXE>  <DLL> - create process with DLL injected           \n"
-				"                                                                                  \n"
-				"Available options:                                                                \n",
+				"Usage: {0}    [OPTIONS] <PID>  <DLL>                  - inject DLL into an existing process by PID \n"
+				"       {0} -n [OPTIONS] <NAME> <DLL>                  - inject DLL into an existing process by name\n"
+				"       {0} -c [OPTIONS] <EXE>  <DLL> [-- <ARGS>, ...] - create process with DLL injected           \n"
+				"                                                                                                   \n"
+				"Available options:                                                                                 \n",
 				m_args.getExecutablePath().filename().string()
 			);
 
