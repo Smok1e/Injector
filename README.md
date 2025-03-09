@@ -19,10 +19,13 @@ constexpr T RVA(HMODULE module, uintptr_t offset)
 
 // This hack will overwrite function address in process import table
 template<typename T>
-T SetProcAddress(const char* target_module_name, const char* target_prog_name, T new_procedure)
+T SetProcAddress(
+	const char* target_module_name, 
+	const char* target_proc_name, 
+	T           new_procedure, 
+	HMODULE     module /*= GetModuleHandleA(nullptr)*/
+)
 {
-	auto module = GetModuleHandleA(nullptr);
-
 	auto* dos_header = RVA<IMAGE_DOS_HEADER*>(module, 0);
 	auto* nt_header  = RVA<IMAGE_NT_HEADERS*>(module, dos_header->e_lfanew);
 
@@ -35,46 +38,46 @@ T SetProcAddress(const char* target_module_name, const char* target_prog_name, T
 	{
 		auto* module_name = RVA<const char*>(module, import_entry->Name);
 
-		if (!_strcmpi(module_name, target_module_name))
+		if (_strcmpi(module_name, target_module_name))
+			continue;
+
+		auto* original_thunk = RVA<IMAGE_THUNK_DATA*>(module, import_entry->OriginalFirstThunk);
+		auto* thunk          = RVA<IMAGE_THUNK_DATA*>(module, import_entry->FirstThunk        );
+
+		for (original_thunk, thunk; original_thunk->u1.Function && thunk->u1.Function; original_thunk++, thunk++)
 		{
-			auto* original_thunk = RVA<IMAGE_THUNK_DATA*>(module, import_entry->OriginalFirstThunk);
-			auto* thunk          = RVA<IMAGE_THUNK_DATA*>(module, import_entry->FirstThunk        );
+			char* procedure_name = RVA<IMAGE_IMPORT_BY_NAME*>(
+				module, 
+				original_thunk->u1.AddressOfData
+			)->Name;
 
-			for (original_thunk, thunk; original_thunk->u1.Function && thunk->u1.Function; original_thunk++, thunk++)
-			{
-				char* procedure_name = RVA<IMAGE_IMPORT_BY_NAME*>(
-					module, 
-					original_thunk->u1.AddressOfData
-				)->Name;
+			if (strcmp(procedure_name, target_proc_name))
+				continue;
 
-				if (!strcmp(procedure_name, target_prog_name))
-				{
-					uintptr_t* procedure_import_record = reinterpret_cast<uintptr_t*>(&(thunk->u1.Function));
-					T original_procedure = reinterpret_cast<T>(*procedure_import_record);
+			uintptr_t* procedure_import_record = reinterpret_cast<uintptr_t*>(&(thunk->u1.Function));
+			T original_procedure = reinterpret_cast<T>(*procedure_import_record);
 
-					DWORD record_page_protection = PAGE_READWRITE;
-					VirtualProtect(
-						procedure_import_record,
-						sizeof(uintptr_t),
-						record_page_protection,
-						&record_page_protection
-					);
+			DWORD record_page_protection = PAGE_READWRITE;
+			VirtualProtect(
+				procedure_import_record,
+				sizeof(uintptr_t),
+				record_page_protection,
+				&record_page_protection
+			);
 
-					memcpy(procedure_import_record, &new_procedure, sizeof(uintptr_t));
+			memcpy(procedure_import_record, &new_procedure, sizeof(uintptr_t));
 
-					VirtualProtect(
-						procedure_import_record,
-						sizeof(uintptr_t),
-						record_page_protection,
-						&record_page_protection
-					);
+			VirtualProtect(
+				procedure_import_record,
+				sizeof(uintptr_t),
+				record_page_protection,
+				&record_page_protection
+			);
 
-					return original_procedure;
-				}
-			}
-
-			break;
+			return original_procedure;
 		}
+
+		break;
 	}
 
 	return nullptr;
